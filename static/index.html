@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HTTP Debugger</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <span class="logo">⚡ HTTP Debugger</span>
+    <div class="topbar-actions">
+      <button onclick="document.getElementById('import-input').click()" class="btn-ghost">⬆ Import</button>
+      <input type="file" id="import-input" accept=".json" hidden>
+    </div>
+  </header>
+
+  <div class="layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-tabs">
+        <button class="sidebar-tab active" data-panel="collections">Collections</button>
+        <button class="sidebar-tab" data-panel="history">History</button>
+      </div>
+
+      <div id="panel-collections" class="sidebar-panel">
+        <div class="panel-toolbar">
+          <button id="btn-new-col" class="btn-primary btn-sm">+ New Collection</button>
+        </div>
+        <div id="collections-tree"></div>
+      </div>
+
+      <div id="panel-history" class="sidebar-panel hidden">
+        <div class="panel-toolbar">
+          <span class="panel-label">最近请求</span>
+          <button id="btn-clear-history" class="btn-ghost btn-sm">清空</button>
+        </div>
+        <div id="history-list"></div>
+      </div>
+    </aside>
+
+    <!-- Workspace -->
+    <main class="workspace">
+      <!-- Request section -->
+      <div class="request-section">
+        <div class="url-bar">
+          <select id="method" class="method-select">
+            <option>GET</option><option>POST</option><option>PUT</option>
+            <option>DELETE</option><option>PATCH</option><option>HEAD</option><option>OPTIONS</option>
+          </select>
+          <input id="url" type="text" class="url-input" placeholder="输入请求 URL...">
+          <button id="btn-send" class="btn-send">Send</button>
+          <button id="btn-save-req" class="btn-secondary">Save</button>
+        </div>
+
+        <div class="meta-bar">
+          <input id="req-name" type="text" class="req-name-input" placeholder="请求名称（可选）">
+          <label class="ssl-check">
+            <input type="checkbox" id="verify-ssl">
+            <span>验证 SSL</span>
+          </label>
+        </div>
+
+        <div class="tabs" id="req-tabs">
+          <button class="tab active" data-tab="params">Params</button>
+          <button class="tab" data-tab="headers">Headers</button>
+          <button class="tab" data-tab="body">Body</button>
+          <button class="tab" data-tab="auth">Auth</button>
+        </div>
+
+        <div class="tab-content">
+          <div class="tab-pane active" id="pane-params">
+            <div id="params-editor" class="kv-editor"></div>
+          </div>
+          <div class="tab-pane hidden" id="pane-headers">
+            <div id="headers-editor" class="kv-editor"></div>
+          </div>
+          <div class="tab-pane hidden" id="pane-body">
+            <div class="body-mode-bar">
+              <label><input type="radio" name="body-mode" value="none" checked> none</label>
+              <label><input type="radio" name="body-mode" value="raw"> raw</label>
+              <label><input type="radio" name="body-mode" value="form-data"> form-data</label>
+              <label><input type="radio" name="body-mode" value="urlencoded"> x-www-form-urlencoded</label>
+            </div>
+            <div id="body-content"></div>
+          </div>
+          <div class="tab-pane hidden" id="pane-auth">
+            <div class="auth-type-bar">
+              <label>认证类型：</label>
+              <select id="auth-type">
+                <option value="none">No Auth</option>
+                <option value="bearer">Bearer Token</option>
+                <option value="basic">Basic Auth</option>
+              </select>
+            </div>
+            <div id="auth-fields"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Response section -->
+      <div class="response-section">
+        <div class="response-meta">
+          <span class="section-title">Response</span>
+          <div id="resp-stats" class="resp-stats hidden">
+            <span id="resp-status" class="badge"></span>
+            <span id="resp-time" class="stat"></span>
+            <span id="resp-size" class="stat"></span>
+          </div>
+          <span id="resp-loading" class="loading-text hidden">发送中...</span>
+        </div>
+
+        <div class="tabs" id="resp-tabs">
+          <button class="tab active" data-tab="resp-body">Body</button>
+          <button class="tab" data-tab="resp-headers">Headers</button>
+        </div>
+
+        <div class="tab-content resp-tab-content">
+          <div class="tab-pane active" id="pane-resp-body">
+            <div id="resp-body-toolbar" class="resp-toolbar hidden">
+              <div class="view-toggle">
+                <button class="toggle-btn active" id="btn-pretty">Pretty</button>
+                <button class="toggle-btn" id="btn-raw-view">Raw</button>
+              </div>
+              <button id="btn-copy-resp" class="btn-ghost btn-sm">Copy</button>
+            </div>
+            <div id="resp-body-content" class="resp-body">
+              <div class="empty-hint">发送请求后查看响应</div>
+            </div>
+          </div>
+          <div class="tab-pane hidden" id="pane-resp-headers">
+            <div id="resp-headers-content" class="resp-headers-list"></div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- Modal: Save Request -->
+<div class="modal-overlay hidden" id="modal-save">
+  <div class="modal">
+    <div class="modal-header">保存请求</div>
+    <div class="modal-body">
+      <div class="form-row">
+        <label>请求名称</label>
+        <input type="text" id="save-req-name" class="form-input">
+      </div>
+      <div class="form-row">
+        <label>保存到 Collection</label>
+        <select id="save-col-select" class="form-input"></select>
+      </div>
+      <div class="form-row">
+        <label>文件夹（可选）</label>
+        <select id="save-folder-select" class="form-input">
+          <option value="">根目录</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button id="btn-save-confirm" class="btn-primary">保存</button>
+      <button class="btn-ghost modal-cancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: New Collection -->
+<div class="modal-overlay hidden" id="modal-new-col">
+  <div class="modal">
+    <div class="modal-header">新建 Collection</div>
+    <div class="modal-body">
+      <div class="form-row">
+        <label>名称</label>
+        <input type="text" id="new-col-name" class="form-input" placeholder="My Collection">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button id="btn-create-col" class="btn-primary">创建</button>
+      <button class="btn-ghost modal-cancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: New Folder -->
+<div class="modal-overlay hidden" id="modal-new-folder">
+  <div class="modal">
+    <div class="modal-header">新建文件夹</div>
+    <div class="modal-body">
+      <div class="form-row">
+        <label>名称</label>
+        <input type="text" id="new-folder-name" class="form-input" placeholder="Folder Name">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button id="btn-create-folder" class="btn-primary">创建</button>
+      <button class="btn-ghost modal-cancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- Context Menu -->
+<div class="context-menu hidden" id="context-menu">
+  <div class="ctx-item" id="ctx-add-request">添加请求</div>
+  <div class="ctx-item" id="ctx-add-folder">添加文件夹</div>
+  <div class="ctx-item" id="ctx-rename">重命名</div>
+  <div class="ctx-item" id="ctx-export">导出 (Postman)</div>
+  <div class="ctx-item ctx-danger" id="ctx-delete">删除</div>
+</div>
+
+<div class="toast hidden" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

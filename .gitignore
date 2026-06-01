@@ -1,0 +1,15 @@
+# ========== Claude/IDE 配置 ==========
+/.idea
+
+# ========== 运行时目录 ==========
+/.web.pid
+
+# ========== Python 编译文件 ==========
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+/data/*.json
+.vscode
