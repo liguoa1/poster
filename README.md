@@ -62,3 +62,7 @@ poster/
     ├── style.css
     └── app.js
 ```
+
+## License
+
+[MIT](./LICENSE) © 2026 liguoa1
