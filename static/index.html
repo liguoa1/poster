@@ -40,6 +40,9 @@
       </div>
     </aside>
 
+    <!-- 侧边栏拖拽手柄 -->
+    <div class="resize-handle-v" id="resize-sidebar"></div>
+
     <!-- Workspace -->
     <main class="workspace">
       <!-- Request section -->
@@ -59,6 +62,10 @@
           <label class="ssl-check">
             <input type="checkbox" id="verify-ssl">
             <span>验证 SSL</span>
+          </label>
+          <label class="ssl-check">
+            <input type="checkbox" id="use-sys-proxy">
+            <span>系统代理</span>
           </label>
         </div>
 
@@ -98,6 +105,9 @@
           </div>
         </div>
       </div>
+
+      <!-- 上下拖拽手柄 -->
+      <div class="resize-handle-h" id="resize-panel"></div>
 
       <!-- Response section -->
       <div class="response-section">

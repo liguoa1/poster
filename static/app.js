@@ -160,6 +160,7 @@ async function sendRequest() {
     auth_username: req.auth.username,
     auth_password: req.auth.password,
     verify_ssl: $('verify-ssl').checked,
+    use_sys_proxy: $('use-sys-proxy').checked,
   };
 
   try {
@@ -776,6 +777,72 @@ async function init() {
     _pendingFolderColId = null;
   });
   $('new-folder-name').addEventListener('keydown', e => { if (e.key === 'Enter') $('btn-create-folder').click(); });
+
+  initResize();
+}
+
+// ── Resize panels ─────────────────────────────────────────────────────────
+function initResize() {
+  const sidebar        = document.querySelector('.sidebar');
+  const requestSection = document.querySelector('.request-section');
+  const workspace      = document.querySelector('.workspace');
+
+  // 从 localStorage 恢复上次尺寸
+  const savedSW = localStorage.getItem('layout.sidebarWidth');
+  const savedRH = localStorage.getItem('layout.requestHeight');
+  if (savedSW) { sidebar.style.width = savedSW; sidebar.style.minWidth = savedSW; }
+  if (savedRH) { requestSection.style.flex = 'none'; requestSection.style.height = savedRH; }
+
+  // 左右：侧边栏宽度
+  $('resize-sidebar').addEventListener('mousedown', e => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = sidebar.offsetWidth;
+    const handle = $('resize-sidebar');
+    handle.classList.add('active');
+    document.body.classList.add('resizing', 'resizing-v');
+
+    const onMove = e => {
+      const w = Math.max(160, Math.min(520, startW + e.clientX - startX));
+      sidebar.style.width = w + 'px';
+      sidebar.style.minWidth = w + 'px';
+    };
+    const onUp = () => {
+      handle.classList.remove('active');
+      document.body.classList.remove('resizing', 'resizing-v');
+      localStorage.setItem('layout.sidebarWidth', sidebar.style.width);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  // 上下：请求区高度
+  $('resize-panel').addEventListener('mousedown', e => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = requestSection.offsetHeight;
+    const handle = $('resize-panel');
+    handle.classList.add('active');
+    document.body.classList.add('resizing', 'resizing-h');
+
+    const onMove = e => {
+      const total = workspace.offsetHeight;
+      const h = Math.max(120, Math.min(total - 120, startH + e.clientY - startY));
+      requestSection.style.flex = 'none';
+      requestSection.style.height = h + 'px';
+    };
+    const onUp = () => {
+      handle.classList.remove('active');
+      document.body.classList.remove('resizing', 'resizing-h');
+      localStorage.setItem('layout.requestHeight', requestSection.style.height);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
 }
 
 document.addEventListener('DOMContentLoaded', init);

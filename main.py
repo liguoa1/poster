@@ -48,6 +48,7 @@ class ProxyRequest(BaseModel):
     auth_username: str = ""
     auth_password: str = ""
     verify_ssl: bool = False
+    use_sys_proxy: bool = False
 
 
 class Collection(BaseModel):
@@ -82,7 +83,12 @@ async def proxy_request(req: ProxyRequest):
 
     start = time.time()
     try:
-        async with httpx.AsyncClient(verify=req.verify_ssl, follow_redirects=True, timeout=30.0) as client:
+        async with httpx.AsyncClient(
+            verify=req.verify_ssl,
+            follow_redirects=True,
+            timeout=30.0,
+            trust_env=req.use_sys_proxy,  # 默认绕过系统代理，本地接口不走代理
+        ) as client:
             response = await client.request(
                 method=req.method.upper(),
                 url=req.url,

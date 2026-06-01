@@ -62,13 +62,53 @@ body {
 /* ── Sidebar ── */
 .sidebar {
   width: 260px;
-  min-width: 260px;
+  min-width: 160px;
+  max-width: 520px;
   background: var(--bg-surface);
-  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  flex-shrink: 0;
 }
+
+/* ── Resize handles ── */
+.resize-handle-v {
+  width: 4px;
+  background: var(--border);
+  cursor: col-resize;
+  flex-shrink: 0;
+  transition: background 0.15s;
+  position: relative;
+  z-index: 10;
+}
+.resize-handle-v::after {
+  content: '';
+  position: absolute;
+  inset: 0 -4px;
+}
+.resize-handle-v:hover,
+.resize-handle-v.active { background: var(--accent); }
+
+.resize-handle-h {
+  height: 4px;
+  background: var(--border);
+  cursor: row-resize;
+  flex-shrink: 0;
+  transition: background 0.15s;
+  position: relative;
+  z-index: 10;
+}
+.resize-handle-h::after {
+  content: '';
+  position: absolute;
+  inset: -4px 0;
+}
+.resize-handle-h:hover,
+.resize-handle-h.active { background: var(--accent); }
+
+body.resizing { user-select: none; }
+body.resizing-v { cursor: col-resize !important; }
+body.resizing-h { cursor: row-resize !important; }
 .sidebar-tabs {
   display: flex;
   border-bottom: 1px solid var(--border);
@@ -193,9 +233,9 @@ body {
 /* ── Request Section ── */
 .request-section {
   flex: 0 0 46%;
+  min-height: 120px;
   display: flex;
   flex-direction: column;
-  border-bottom: 3px solid var(--border);
   overflow: hidden;
 }
 
