@@ -691,3 +691,101 @@ body.resizing-h { cursor: row-resize !important; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #555; }
+
+/* ── Auth page ── */
+.auth-page {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-base);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9000;
+}
+.auth-page.hidden { display: none !important; }
+
+.auth-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 32px 36px;
+  width: 380px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.4);
+}
+
+.auth-logo {
+  font-size: 20px;
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 28px;
+  color: var(--text-primary);
+  letter-spacing: .5px;
+}
+
+.auth-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 22px;
+}
+.auth-tab {
+  flex: 1;
+  padding: 8px 0;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  border-bottom: 2px solid transparent;
+  transition: color .15s;
+}
+.auth-tab:hover { color: var(--text-primary); }
+.auth-tab.active { color: var(--text-primary); border-bottom-color: var(--accent); font-weight: 600; }
+
+.auth-form .form-row { margin-bottom: 14px; }
+.auth-form .form-row label { font-size: 13px; margin-bottom: 5px; display: block; }
+.auth-form .form-input { font-size: 14px; padding: 9px 12px; }
+
+.auth-error {
+  color: #ef9a9a;
+  font-size: 12px;
+  margin-bottom: 8px;
+  min-height: 18px;
+}
+
+.auth-btn {
+  width: 100%;
+  padding: 10px;
+  font-size: 14px;
+  margin-top: 4px;
+  letter-spacing: .3px;
+}
+
+/* ── Topbar user ── */
+.topbar-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+.topbar-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+}
+.topbar-username {
+  font-size: 13px;
+  color: var(--text-secondary);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -13,6 +13,11 @@
     <div class="topbar-actions">
       <button onclick="document.getElementById('import-input').click()" class="btn-ghost">⬆ Import</button>
       <input type="file" id="import-input" accept=".json" hidden>
+      <div class="topbar-user hidden" id="topbar-user">
+        <span class="topbar-avatar" id="topbar-avatar"></span>
+        <span class="topbar-username" id="topbar-username"></span>
+        <button id="btn-logout" class="btn-ghost btn-sm">退出</button>
+      </div>
     </div>
   </header>
 
@@ -145,6 +150,47 @@
         </div>
       </div>
     </main>
+  </div>
+</div>
+
+<!-- Auth page overlay -->
+<div id="auth-page" class="auth-page">
+  <div class="auth-card">
+    <div class="auth-logo">⚡ HTTP Debugger</div>
+    <div class="auth-tabs">
+      <button class="auth-tab active" data-auth="login">登录</button>
+      <button class="auth-tab" data-auth="register">注册</button>
+    </div>
+
+    <div class="auth-form" id="auth-form-login">
+      <div class="form-row">
+        <label>用户名</label>
+        <input type="text" id="login-user" class="form-input" placeholder="请输入用户名" autocomplete="username">
+      </div>
+      <div class="form-row">
+        <label>密码</label>
+        <input type="password" id="login-pass" class="form-input" placeholder="请输入密码" autocomplete="current-password">
+      </div>
+      <p class="auth-error hidden" id="login-err"></p>
+      <button id="btn-do-login" class="btn-primary auth-btn">登录</button>
+    </div>
+
+    <div class="auth-form hidden" id="auth-form-register">
+      <div class="form-row">
+        <label>用户名</label>
+        <input type="text" id="reg-user" class="form-input" placeholder="至少 2 个字符" autocomplete="username">
+      </div>
+      <div class="form-row">
+        <label>密码</label>
+        <input type="password" id="reg-pass" class="form-input" placeholder="至少 6 个字符" autocomplete="new-password">
+      </div>
+      <div class="form-row">
+        <label>确认密码</label>
+        <input type="password" id="reg-pass2" class="form-input" placeholder="再次输入密码" autocomplete="new-password">
+      </div>
+      <p class="auth-error hidden" id="reg-err"></p>
+      <button id="btn-do-register" class="btn-primary auth-btn">注册</button>
+    </div>
   </div>
 </div>
 

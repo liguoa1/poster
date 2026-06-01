@@ -1,25 +1,66 @@
 import json
 import os
+import secrets
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+import hashlib
+import hmac
+
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+import jwt
+from fastapi import Depends, FastAPI, HTTPException, Request, Security
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 app = FastAPI(title="HTTP Debugger")
 
 DATA_DIR = "data"
-COLLECTIONS_FILE = os.path.join(DATA_DIR, "collections.json")
-HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
+USERS_FILE = os.path.join(DATA_DIR, "users.json")
+ALGORITHM = "HS256"
+TOKEN_DAYS = 30
 
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs("static", exist_ok=True)
 
+bearer_scheme = HTTPBearer(auto_error=False)
+_ITERATIONS = 260_000
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), _ITERATIONS)
+    return f"pbkdf2:{salt}:{key.hex()}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        _, salt, key_hex = stored.split(":")
+        key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), _ITERATIONS)
+        return hmac.compare_digest(key.hex(), key_hex)
+    except Exception:
+        return False
+
+
+def _get_secret() -> str:
+    path = os.path.join(DATA_DIR, ".secret")
+    if os.path.exists(path):
+        with open(path) as f:
+            return f.read().strip()
+    key = secrets.token_hex(32)
+    with open(path, "w") as f:
+        f.write(key)
+    return key
+
+
+SECRET_KEY = _get_secret()
+
+
+# ── File helpers ──────────────────────────────────────────────────────────
 
 def load_json(path, default):
     try:
@@ -33,6 +74,83 @@ def save_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+
+def col_path(user_id: str) -> str:
+    return os.path.join(DATA_DIR, f"collections_{user_id}.json")
+
+
+def hist_path(user_id: str) -> str:
+    return os.path.join(DATA_DIR, f"history_{user_id}.json")
+
+
+# ── Auth ──────────────────────────────────────────────────────────────────
+
+def make_token(user_id: str) -> str:
+    exp = datetime.utcnow() + timedelta(days=TOKEN_DAYS)
+    return jwt.encode({"sub": user_id, "exp": exp}, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def get_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(bearer_scheme),
+) -> dict:
+    if not credentials:
+        raise HTTPException(401, "未登录，请先登录")
+    try:
+        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub", "")
+        if not user_id:
+            raise HTTPException(401, "Token 无效")
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(401, "登录已过期，请重新登录")
+    except jwt.PyJWTError:
+        raise HTTPException(401, "Token 无效")
+    user = next((u for u in load_json(USERS_FILE, []) if u["id"] == user_id), None)
+    if not user:
+        raise HTTPException(401, "用户不存在")
+    return user
+
+
+class AuthReq(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/auth/register")
+def register(req: AuthReq):
+    name = req.username.strip()
+    if len(name) < 2:
+        raise HTTPException(400, "用户名至少 2 个字符")
+    if len(req.password) < 6:
+        raise HTTPException(400, "密码至少 6 个字符")
+    users = load_json(USERS_FILE, [])
+    if any(u["username"].lower() == name.lower() for u in users):
+        raise HTTPException(400, "用户名已存在")
+    user = {
+        "id": str(uuid.uuid4()),
+        "username": name,
+        "password_hash": hash_password(req.password),
+        "created_at": datetime.now().isoformat(),
+    }
+    users.append(user)
+    save_json(USERS_FILE, users)
+    return {"token": make_token(user["id"]), "user": {"id": user["id"], "username": user["username"]}}
+
+
+@app.post("/api/auth/login")
+def login(req: AuthReq):
+    users = load_json(USERS_FILE, [])
+    user = next((u for u in users if u["username"].lower() == req.username.strip().lower()), None)
+    if not user or not verify_password(req.password, user["password_hash"]):
+        raise HTTPException(401, "用户名或密码错误")
+    return {"token": make_token(user["id"]), "user": {"id": user["id"], "username": user["username"]}}
+
+
+@app.get("/api/auth/me")
+def get_me(current_user: dict = Depends(get_current_user)):
+    return {"id": current_user["id"], "username": current_user["username"]}
+
+
+# ── Models ────────────────────────────────────────────────────────────────
 
 class ProxyRequest(BaseModel):
     method: str
@@ -57,8 +175,10 @@ class Collection(BaseModel):
     items: List[Any] = []
 
 
+# ── Proxy ──────────────────────────────────────────────────────────────────
+
 @app.post("/api/proxy")
-async def proxy_request(req: ProxyRequest):
+async def proxy_request(req: ProxyRequest, current_user: dict = Depends(get_current_user)):
     headers = {k: str(v) for k, v in req.headers.items() if v is not None}
 
     auth = None
@@ -71,7 +191,6 @@ async def proxy_request(req: ProxyRequest):
 
     content = None
     data = None
-
     if req.body_mode == "raw" and req.body_raw:
         content = req.body_raw.encode("utf-8")
         if not any(k.lower() == "content-type" for k in headers):
@@ -87,7 +206,7 @@ async def proxy_request(req: ProxyRequest):
             verify=req.verify_ssl,
             follow_redirects=True,
             timeout=30.0,
-            trust_env=req.use_sys_proxy,  # 默认绕过系统代理，本地接口不走代理
+            trust_env=req.use_sys_proxy,
         ) as client:
             response = await client.request(
                 method=req.method.upper(),
@@ -100,7 +219,6 @@ async def proxy_request(req: ProxyRequest):
             )
 
         elapsed = round((time.time() - start) * 1000)
-
         try:
             body = response.text
         except Exception:
@@ -124,7 +242,7 @@ async def proxy_request(req: ProxyRequest):
             "elapsed": elapsed,
             "request": req.dict(),
             "response": result,
-        })
+        }, current_user["id"])
 
         return result
 
@@ -138,88 +256,97 @@ async def proxy_request(req: ProxyRequest):
         raise HTTPException(500, str(e))
 
 
-def _save_history(entry):
-    history = load_json(HISTORY_FILE, [])
+def _save_history(entry, user_id: str):
+    path = hist_path(user_id)
+    history = load_json(path, [])
     history.insert(0, entry)
-    save_json(HISTORY_FILE, history[:100])
+    save_json(path, history[:100])
 
+
+# ── History ───────────────────────────────────────────────────────────────
 
 @app.get("/api/history")
-def get_history():
-    return load_json(HISTORY_FILE, [])
+def get_history(current_user: dict = Depends(get_current_user)):
+    return load_json(hist_path(current_user["id"]), [])
 
 
 @app.delete("/api/history")
-def clear_history():
-    save_json(HISTORY_FILE, [])
+def clear_history(current_user: dict = Depends(get_current_user)):
+    save_json(hist_path(current_user["id"]), [])
     return {"ok": True}
 
 
+# ── Collections ───────────────────────────────────────────────────────────
+
 @app.get("/api/collections")
-def get_collections():
-    return load_json(COLLECTIONS_FILE, [])
+def get_collections(current_user: dict = Depends(get_current_user)):
+    return load_json(col_path(current_user["id"]), [])
 
 
 @app.post("/api/collections")
-def create_collection(col: Collection):
-    cols = load_json(COLLECTIONS_FILE, [])
+def create_collection(col: Collection, current_user: dict = Depends(get_current_user)):
+    path = col_path(current_user["id"])
+    cols = load_json(path, [])
     col.id = str(uuid.uuid4())
     cols.append(col.dict())
-    save_json(COLLECTIONS_FILE, cols)
+    save_json(path, cols)
     return col
 
 
 @app.put("/api/collections/{col_id}")
-def update_collection(col_id: str, col: Collection):
-    cols = load_json(COLLECTIONS_FILE, [])
+def update_collection(col_id: str, col: Collection, current_user: dict = Depends(get_current_user)):
+    path = col_path(current_user["id"])
+    cols = load_json(path, [])
     for i, c in enumerate(cols):
         if c["id"] == col_id:
             col.id = col_id
             cols[i] = col.dict()
-            save_json(COLLECTIONS_FILE, cols)
+            save_json(path, cols)
             return col
     raise HTTPException(404, "Collection not found")
 
 
 @app.delete("/api/collections/{col_id}")
-def delete_collection(col_id: str):
-    cols = load_json(COLLECTIONS_FILE, [])
-    save_json(COLLECTIONS_FILE, [c for c in cols if c["id"] != col_id])
+def delete_collection(col_id: str, current_user: dict = Depends(get_current_user)):
+    path = col_path(current_user["id"])
+    cols = load_json(path, [])
+    save_json(path, [c for c in cols if c["id"] != col_id])
     return {"ok": True}
 
 
+# ── Import / Export ───────────────────────────────────────────────────────
+
 @app.post("/api/import")
-async def import_collection(request: Request):
+async def import_collection(request: Request, current_user: dict = Depends(get_current_user)):
+    path = col_path(current_user["id"])
     body = await request.json()
-    if "info" in body and "item" in body:
-        col = _from_postman(body)
-    else:
-        col = body
+    col = _from_postman(body) if ("info" in body and "item" in body) else body
     if not col.get("id"):
         col["id"] = str(uuid.uuid4())
-    cols = load_json(COLLECTIONS_FILE, [])
+    cols = load_json(path, [])
     for i, c in enumerate(cols):
         if c.get("id") == col["id"]:
             cols[i] = col
-            save_json(COLLECTIONS_FILE, cols)
+            save_json(path, cols)
             return col
     cols.append(col)
-    save_json(COLLECTIONS_FILE, cols)
+    save_json(path, cols)
     return col
 
 
 @app.get("/api/export/{col_id}")
-def export_collection(col_id: str):
-    cols = load_json(COLLECTIONS_FILE, [])
+def export_collection(col_id: str, current_user: dict = Depends(get_current_user)):
+    cols = load_json(col_path(current_user["id"]), [])
     col = next((c for c in cols if c["id"] == col_id), None)
     if not col:
         raise HTTPException(404, "Collection not found")
-    exported = _to_postman(col)
     return JSONResponse(
-        content=exported,
+        content=_to_postman(col),
         headers={"Content-Disposition": f'attachment; filename="{col["name"]}.json"'},
     )
 
+
+# ── Postman format conversion ─────────────────────────────────────────────
 
 def _from_postman(pm: dict) -> dict:
     def conv(item):

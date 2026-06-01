@@ -1,9 +1,31 @@
 'use strict';
 
-// ── State ──────────────────────────────────────────────────────────────────
+// ── Auth state ────────────────────────────────────────────────────────────
+const TOKEN_KEY = 'http_debugger_token';
+let currentUser = null;
+
+function getToken()      { return localStorage.getItem(TOKEN_KEY); }
+function setToken(t)     { localStorage.setItem(TOKEN_KEY, t); }
+function clearToken()    { localStorage.removeItem(TOKEN_KEY); }
+
+async function apiFetch(url, options = {}) {
+  const token = getToken();
+  const headers = { ...options.headers };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const r = await fetch(url, { ...options, headers });
+  if (r.status === 401) {
+    clearToken();
+    currentUser = null;
+    showAuthPage();
+    throw new Error('登录已过期，请重新登录');
+  }
+  return r;
+}
+
+// ── Request state ─────────────────────────────────────────────────────────
 let collections = [];
 let historyList = [];
-let currentItem = null;   // { colId, itemId }
+let currentItem = null;
 let respBodyRaw = '';
 let respPretty = true;
 let _pendingFolderColId = null;
@@ -18,11 +40,121 @@ let req = {
   auth: { type: 'none', bearer: '', username: '', password: '' },
 };
 
-function kv() { return { id: uid(), key: '', value: '', enabled: true }; }
+function kv()  { return { id: uid(), key: '', value: '', enabled: true }; }
 function uid() { return Math.random().toString(36).slice(2, 10); }
 const $ = id => document.getElementById(id);
 const $$ = sel => document.querySelectorAll(sel);
-function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function esc(s) {
+  return (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ── Auth UI ───────────────────────────────────────────────────────────────
+function showAuthPage() {
+  $('auth-page').classList.remove('hidden');
+  $('topbar-user').classList.add('hidden');
+  // reset form errors
+  ['login-err', 'reg-err'].forEach(id => { const el = $(id); el.textContent = ''; el.classList.add('hidden'); });
+}
+
+async function showMainApp() {
+  $('auth-page').classList.add('hidden');
+  $('topbar-user').classList.remove('hidden');
+  $('topbar-username').textContent = currentUser.username;
+  $('topbar-avatar').textContent = currentUser.username.slice(0, 1).toUpperCase();
+  // Reset request area for this user session
+  currentItem = null;
+  await Promise.all([loadCollections(), loadHistory()]);
+}
+
+async function checkAuth() {
+  const token = getToken();
+  if (token) {
+    try {
+      const r = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } });
+      if (r.ok) {
+        currentUser = await r.json();
+        await showMainApp();
+        return;
+      }
+    } catch { /* network error, fall through */ }
+    clearToken();
+  }
+  showAuthPage();
+}
+
+async function doLogin() {
+  const username = $('login-user').value.trim();
+  const password = $('login-pass').value;
+  const errEl = $('login-err');
+  errEl.classList.add('hidden');
+  if (!username || !password) { setAuthErr(errEl, '请填写用户名和密码'); return; }
+
+  $('btn-do-login').disabled = true;
+  try {
+    const r = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await r.json();
+    if (!r.ok) { setAuthErr(errEl, data.detail || '登录失败'); return; }
+    setToken(data.token);
+    currentUser = data.user;
+    $('login-pass').value = '';
+    await showMainApp();
+  } catch (e) {
+    setAuthErr(errEl, e.message);
+  } finally {
+    $('btn-do-login').disabled = false;
+  }
+}
+
+async function doRegister() {
+  const username = $('reg-user').value.trim();
+  const password = $('reg-pass').value;
+  const password2 = $('reg-pass2').value;
+  const errEl = $('reg-err');
+  errEl.classList.add('hidden');
+  if (!username || !password) { setAuthErr(errEl, '请填写用户名和密码'); return; }
+  if (password !== password2)  { setAuthErr(errEl, '两次密码不一致'); return; }
+
+  $('btn-do-register').disabled = true;
+  try {
+    const r = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await r.json();
+    if (!r.ok) { setAuthErr(errEl, data.detail || '注册失败'); return; }
+    setToken(data.token);
+    currentUser = data.user;
+    $('reg-pass').value = '';
+    $('reg-pass2').value = '';
+    await showMainApp();
+  } catch (e) {
+    setAuthErr(errEl, e.message);
+  } finally {
+    $('btn-do-register').disabled = false;
+  }
+}
+
+function setAuthErr(el, msg) {
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+function doLogout() {
+  clearToken();
+  currentUser = null;
+  collections = [];
+  historyList = [];
+  renderCollections();
+  renderHistory();
+  clearResp();
+  showAuthPage();
+  toast('已退出登录', 'info');
+}
 
 // ── KV Editor ──────────────────────────────────────────────────────────────
 function renderKV(containerId, items, onChange) {
@@ -38,9 +170,9 @@ function renderKV(containerId, items, onChange) {
       <input type="text" class="kv-val" placeholder="Value" value="${esc(item.value)}">
       <button class="kv-del" title="Delete">×</button>`;
     row.querySelector('.kv-check').onchange = e => { items[i].enabled = e.target.checked; onChange && onChange(items); };
-    row.querySelector('.kv-key').oninput = e => { items[i].key = e.target.value; onChange && onChange(items); };
-    row.querySelector('.kv-val').oninput = e => { items[i].value = e.target.value; onChange && onChange(items); };
-    row.querySelector('.kv-del').onclick = () => {
+    row.querySelector('.kv-key').oninput   = e => { items[i].key   = e.target.value; onChange && onChange(items); };
+    row.querySelector('.kv-val').oninput   = e => { items[i].value = e.target.value; onChange && onChange(items); };
+    row.querySelector('.kv-del').onclick   = () => {
       items.splice(i, 1);
       if (!items.length) items.push(kv());
       renderKV(containerId, items, onChange);
@@ -69,7 +201,7 @@ function onUrlInput() {
       if (!req.params.length) req.params.push(kv());
       renderKV('params-editor', req.params, onParamsChange);
     }
-  } catch(e) {}
+  } catch(e) { /* ignore */ }
   _syncingUrl = false;
 }
 
@@ -103,7 +235,7 @@ function renderBody() {
     </div>
     <textarea id="body-raw" class="code-editor" placeholder="请求体...">${esc(req.body.raw)}</textarea>`;
     $('raw-type').onchange = e => { req.body.rawType = e.target.value; };
-    $('body-raw').oninput = e => { req.body.raw = e.target.value; };
+    $('body-raw').oninput  = e => { req.body.raw = e.target.value; };
   } else if (mode === 'form-data') {
     c.innerHTML = '<div id="body-form-editor" class="kv-editor"></div>';
     renderKV('body-form-editor', req.body.formData, () => {});
@@ -164,23 +296,19 @@ async function sendRequest() {
   };
 
   try {
-    const r = await fetch('/api/proxy', {
+    const r = await apiFetch('/api/proxy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
     const text = await r.text();
     let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      showError(`服务器错误 (${r.status}): ${text.slice(0, 300)}`);
-      return;
-    }
+    try { data = JSON.parse(text); }
+    catch { showError(`服务器错误 (${r.status}): ${text.slice(0, 300)}`); return; }
     if (!r.ok) { showError(data.detail || JSON.stringify(data)); }
     else { renderResp(data); }
   } catch(e) {
-    showError(`网络错误: ${e.message}`);
+    if (e.message !== '登录已过期，请重新登录') showError(`网络错误: ${e.message}`);
   } finally {
     setLoading(false);
   }
@@ -214,7 +342,7 @@ function renderResp(resp) {
 function renderRespBody() {
   const el = $('resp-body-content');
   if (!respBodyRaw) { el.innerHTML = '<div class="empty-hint">响应体为空</div>'; return; }
-  if (!respPretty) { el.innerHTML = `<pre class="code-pre">${esc(respBodyRaw)}</pre>`; return; }
+  if (!respPretty)  { el.innerHTML = `<pre class="code-pre">${esc(respBodyRaw)}</pre>`; return; }
   try {
     const parsed = JSON.parse(respBodyRaw);
     el.innerHTML = `<pre class="code-pre">${jsonHL(JSON.stringify(parsed, null, 2))}</pre>`;
@@ -260,7 +388,7 @@ function fmtBytes(n) {
 
 // ── Collections ───────────────────────────────────────────────────────────
 async function loadCollections() {
-  const r = await fetch('/api/collections');
+  const r = await apiFetch('/api/collections');
   collections = await r.json();
   renderCollections();
 }
@@ -320,7 +448,7 @@ function buildItemNode(item, colId) {
       <span>📂</span>
       <span class="folder-name" title="${esc(item.name)}">${esc(item.name)}</span>
       <div class="item-actions">
-        <button class="icon-btn" data-action="del" title="删除">×</button>
+        <button class="icon-btn danger" data-action="del" title="删除">×</button>
       </div>`;
     const body = document.createElement('div');
     body.className = 'folder-body hidden';
@@ -370,13 +498,12 @@ function loadReqItem(item, colId) {
   renderBody();
   $('auth-type').value = req.auth.type;
   renderAuth();
-  // Switch to active request tab
   activateTab('req-tabs', 'params');
 }
 
 // ── Collection CRUD ───────────────────────────────────────────────────────
 async function createCollection(name) {
-  const r = await fetch('/api/collections', {
+  const r = await apiFetch('/api/collections', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, items: [] }),
@@ -388,7 +515,7 @@ async function createCollection(name) {
 }
 
 async function saveColToServer(col) {
-  await fetch(`/api/collections/${col.id}`, {
+  await apiFetch(`/api/collections/${col.id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(col),
@@ -397,7 +524,7 @@ async function saveColToServer(col) {
 
 async function deleteCollection(id) {
   if (!confirm('确定删除该 Collection 及其所有请求？')) return;
-  await fetch(`/api/collections/${id}`, { method: 'DELETE' });
+  await apiFetch(`/api/collections/${id}`, { method: 'DELETE' });
   collections = collections.filter(c => c.id !== id);
   renderCollections();
   toast('已删除', 'success');
@@ -448,7 +575,6 @@ async function saveRequest() {
 
   const col = collections.find(c => c.id === colId);
   if (!col) return;
-
   const item = buildReqItem(name);
   if (folderId) {
     const folder = col.items.find(i => i.id === folderId);
@@ -473,8 +599,7 @@ async function updateCurrentRequest() {
   function update(items) {
     for (let i = 0; i < items.length; i++) {
       if (items[i].id === currentItem.itemId) {
-        const name = $('req-name').value || items[i].name;
-        const updated = buildReqItem(name);
+        const updated = buildReqItem($('req-name').value || items[i].name);
         updated.id = currentItem.itemId;
         items[i] = updated;
         return true;
@@ -493,9 +618,7 @@ async function updateCurrentRequest() {
 
 function buildReqItem(name) {
   return {
-    id: uid(),
-    type: 'request',
-    name,
+    id: uid(), type: 'request', name,
     method: $('method').value,
     url: $('url').value,
     headers: req.headers.filter(h => h.key),
@@ -509,7 +632,7 @@ function buildReqItem(name) {
 function showCtxMenu(e, colId) {
   const menu = $('context-menu');
   menu.style.left = Math.min(e.clientX, window.innerWidth - 180) + 'px';
-  menu.style.top = Math.min(e.clientY, window.innerHeight - 160) + 'px';
+  menu.style.top  = Math.min(e.clientY, window.innerHeight - 160) + 'px';
   menu.dataset.colId = colId;
   menu.classList.remove('hidden');
   const close = () => { menu.classList.add('hidden'); document.removeEventListener('click', close); };
@@ -518,7 +641,7 @@ function showCtxMenu(e, colId) {
 
 // ── History ───────────────────────────────────────────────────────────────
 async function loadHistory() {
-  const r = await fetch('/api/history');
+  const r = await apiFetch('/api/history');
   historyList = await r.json();
   renderHistory();
 }
@@ -543,27 +666,26 @@ function renderHistory() {
         <span class="history-date">${fmtTime(entry.timestamp)}</span>
       </div>`;
     el.addEventListener('click', () => {
-      if (entry.request) {
-        const r2 = entry.request;
-        $('method').value = r2.method;
-        $('url').value = r2.url;
-        req.url = r2.url;
-        req.params = Object.entries(r2.params || {}).map(([k,v]) => ({ id: uid(), key: k, value: v, enabled: true }));
-        if (!req.params.length) req.params.push(kv());
-        req.headers = Object.entries(r2.headers || {}).map(([k,v]) => ({ id: uid(), key: k, value: v, enabled: true }));
-        if (!req.headers.length) req.headers.push(kv());
-        req.body = { mode: r2.body_mode||'none', raw: r2.body_raw||'', rawType: 'json',
-          formData: r2.body_form||[kv()], urlencoded: r2.body_urlencoded||[kv()] };
-        req.auth = { type: r2.auth_type||'none', bearer: r2.auth_bearer||'',
-          username: r2.auth_username||'', password: r2.auth_password||'' };
-        renderKV('params-editor', req.params, onParamsChange);
-        renderKV('headers-editor', req.headers, () => {});
-        $$('input[name="body-mode"]').forEach(rb => { rb.checked = rb.value === req.body.mode; });
-        renderBody();
-        $('auth-type').value = req.auth.type;
-        renderAuth();
-        currentItem = null;
-      }
+      if (!entry.request) return;
+      const r2 = entry.request;
+      $('method').value = r2.method;
+      $('url').value = r2.url;
+      req.url = r2.url;
+      req.params = Object.entries(r2.params || {}).map(([k,v]) => ({ id: uid(), key: k, value: v, enabled: true }));
+      if (!req.params.length) req.params.push(kv());
+      req.headers = Object.entries(r2.headers || {}).map(([k,v]) => ({ id: uid(), key: k, value: v, enabled: true }));
+      if (!req.headers.length) req.headers.push(kv());
+      req.body = { mode: r2.body_mode||'none', raw: r2.body_raw||'', rawType: 'json',
+        formData: r2.body_form||[kv()], urlencoded: r2.body_urlencoded||[kv()] };
+      req.auth = { type: r2.auth_type||'none', bearer: r2.auth_bearer||'',
+        username: r2.auth_username||'', password: r2.auth_password||'' };
+      renderKV('params-editor', req.params, onParamsChange);
+      renderKV('headers-editor', req.headers, () => {});
+      $$('input[name="body-mode"]').forEach(rb => { rb.checked = rb.value === req.body.mode; });
+      renderBody();
+      $('auth-type').value = req.auth.type;
+      renderAuth();
+      currentItem = null;
       if (entry.response) renderResp(entry.response);
       switchSidebar('collections');
     });
@@ -579,7 +701,7 @@ async function handleImport(file) {
   try {
     const text = await file.text();
     const data = JSON.parse(text);
-    const r = await fetch('/api/import', {
+    const r = await apiFetch('/api/import', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -599,7 +721,7 @@ async function exportCollection(colId) {
   const col = collections.find(c => c.id === colId);
   if (!col) return;
   try {
-    const r = await fetch(`/api/export/${colId}`);
+    const r = await apiFetch(`/api/export/${colId}`);
     const data = await r.json();
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
@@ -613,13 +735,12 @@ async function exportCollection(colId) {
   }
 }
 
-// ── Sidebar panel switch ──────────────────────────────────────────────────
+// ── Sidebar / Tab helpers ─────────────────────────────────────────────────
 function switchSidebar(panel) {
   $$('.sidebar-tab').forEach(t => t.classList.toggle('active', t.dataset.panel === panel));
   $$('.sidebar-panel').forEach(p => p.classList.toggle('hidden', p.id !== `panel-${panel}`));
 }
 
-// ── Tab activation ────────────────────────────────────────────────────────
 function activateTab(tabsId, tabName) {
   const container = $(tabsId);
   if (!container) return;
@@ -658,17 +779,64 @@ function toast(msg, type = 'info') {
 // ── Modal helpers ─────────────────────────────────────────────────────────
 function closeAllModals() { $$('.modal-overlay').forEach(m => m.classList.add('hidden')); }
 
+// ── Resize panels ─────────────────────────────────────────────────────────
+function initResize() {
+  const sidebar        = document.querySelector('.sidebar');
+  const requestSection = document.querySelector('.request-section');
+  const workspace      = document.querySelector('.workspace');
+
+  const savedSW = localStorage.getItem('layout.sidebarWidth');
+  const savedRH = localStorage.getItem('layout.requestHeight');
+  if (savedSW) { sidebar.style.width = savedSW; sidebar.style.minWidth = savedSW; }
+  if (savedRH) { requestSection.style.flex = 'none'; requestSection.style.height = savedRH; }
+
+  $('resize-sidebar').addEventListener('mousedown', e => {
+    e.preventDefault();
+    const startX = e.clientX, startW = sidebar.offsetWidth;
+    const handle = $('resize-sidebar');
+    handle.classList.add('active');
+    document.body.classList.add('resizing', 'resizing-v');
+    const onMove = e => {
+      const w = Math.max(160, Math.min(520, startW + e.clientX - startX));
+      sidebar.style.width = w + 'px';
+      sidebar.style.minWidth = w + 'px';
+    };
+    const onUp = () => {
+      handle.classList.remove('active');
+      document.body.classList.remove('resizing', 'resizing-v');
+      localStorage.setItem('layout.sidebarWidth', sidebar.style.width);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  $('resize-panel').addEventListener('mousedown', e => {
+    e.preventDefault();
+    const startY = e.clientY, startH = requestSection.offsetHeight;
+    const handle = $('resize-panel');
+    handle.classList.add('active');
+    document.body.classList.add('resizing', 'resizing-h');
+    const onMove = e => {
+      const h = Math.max(120, Math.min(workspace.offsetHeight - 120, startH + e.clientY - startY));
+      requestSection.style.flex = 'none';
+      requestSection.style.height = h + 'px';
+    };
+    const onUp = () => {
+      handle.classList.remove('active');
+      document.body.classList.remove('resizing', 'resizing-h');
+      localStorage.setItem('layout.requestHeight', requestSection.style.height);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────
-async function init() {
-  renderKV('params-editor', req.params, onParamsChange);
-  renderKV('headers-editor', req.headers, () => {});
-  renderBody();
-  renderAuth();
-  initTabGroup('req-tabs');
-  initTabGroup('resp-tabs');
-
-  await Promise.all([loadCollections(), loadHistory()]);
-
+function setupEventListeners() {
   $('url').addEventListener('input', onUrlInput);
 
   $('btn-send').addEventListener('click', sendRequest);
@@ -725,7 +893,7 @@ async function init() {
   });
 
   $('btn-clear-history').addEventListener('click', async () => {
-    await fetch('/api/history', { method: 'DELETE' });
+    await apiFetch('/api/history', { method: 'DELETE' });
     historyList = [];
     renderHistory();
     toast('历史已清空', 'success');
@@ -733,14 +901,11 @@ async function init() {
 
   $$('.sidebar-tab').forEach(t => t.addEventListener('click', () => switchSidebar(t.dataset.panel)));
 
-  // Context menu actions
   $('ctx-export').addEventListener('click', () => {
-    const id = $('context-menu').dataset.colId;
-    if (id) exportCollection(id);
+    exportCollection($('context-menu').dataset.colId);
   });
   $('ctx-delete').addEventListener('click', () => {
-    const id = $('context-menu').dataset.colId;
-    if (id) deleteCollection(id);
+    deleteCollection($('context-menu').dataset.colId);
   });
   $('ctx-add-request').addEventListener('click', () => {
     openSaveDialog($('context-menu').dataset.colId);
@@ -778,71 +943,44 @@ async function init() {
   });
   $('new-folder-name').addEventListener('keydown', e => { if (e.key === 'Enter') $('btn-create-folder').click(); });
 
-  initResize();
+  $('btn-logout').addEventListener('click', doLogout);
 }
 
-// ── Resize panels ─────────────────────────────────────────────────────────
-function initResize() {
-  const sidebar        = document.querySelector('.sidebar');
-  const requestSection = document.querySelector('.request-section');
-  const workspace      = document.querySelector('.workspace');
-
-  // 从 localStorage 恢复上次尺寸
-  const savedSW = localStorage.getItem('layout.sidebarWidth');
-  const savedRH = localStorage.getItem('layout.requestHeight');
-  if (savedSW) { sidebar.style.width = savedSW; sidebar.style.minWidth = savedSW; }
-  if (savedRH) { requestSection.style.flex = 'none'; requestSection.style.height = savedRH; }
-
-  // 左右：侧边栏宽度
-  $('resize-sidebar').addEventListener('mousedown', e => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = sidebar.offsetWidth;
-    const handle = $('resize-sidebar');
-    handle.classList.add('active');
-    document.body.classList.add('resizing', 'resizing-v');
-
-    const onMove = e => {
-      const w = Math.max(160, Math.min(520, startW + e.clientX - startX));
-      sidebar.style.width = w + 'px';
-      sidebar.style.minWidth = w + 'px';
-    };
-    const onUp = () => {
-      handle.classList.remove('active');
-      document.body.classList.remove('resizing', 'resizing-v');
-      localStorage.setItem('layout.sidebarWidth', sidebar.style.width);
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+function setupAuthListeners() {
+  // Tab switching on auth page
+  $$('.auth-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      const target = tab.dataset.auth;
+      $$('.auth-tab').forEach(t => t.classList.toggle('active', t.dataset.auth === target));
+      $('auth-form-login').classList.toggle('hidden', target !== 'login');
+      $('auth-form-register').classList.toggle('hidden', target !== 'register');
+    });
   });
 
-  // 上下：请求区高度
-  $('resize-panel').addEventListener('mousedown', e => {
-    e.preventDefault();
-    const startY = e.clientY;
-    const startH = requestSection.offsetHeight;
-    const handle = $('resize-panel');
-    handle.classList.add('active');
-    document.body.classList.add('resizing', 'resizing-h');
+  $('btn-do-login').addEventListener('click', doLogin);
+  $('login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+  $('login-user').addEventListener('keydown', e => { if (e.key === 'Enter') $('login-pass').focus(); });
 
-    const onMove = e => {
-      const total = workspace.offsetHeight;
-      const h = Math.max(120, Math.min(total - 120, startH + e.clientY - startY));
-      requestSection.style.flex = 'none';
-      requestSection.style.height = h + 'px';
-    };
-    const onUp = () => {
-      handle.classList.remove('active');
-      document.body.classList.remove('resizing', 'resizing-h');
-      localStorage.setItem('layout.requestHeight', requestSection.style.height);
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  });
+  $('btn-do-register').addEventListener('click', doRegister);
+  $('reg-pass2').addEventListener('keydown', e => { if (e.key === 'Enter') doRegister(); });
+}
+
+async function init() {
+  // Initialize static UI components
+  renderKV('params-editor', req.params, onParamsChange);
+  renderKV('headers-editor', req.headers, () => {});
+  renderBody();
+  renderAuth();
+  initTabGroup('req-tabs');
+  initTabGroup('resp-tabs');
+  initResize();
+
+  // Set up all event listeners
+  setupEventListeners();
+  setupAuthListeners();
+
+  // Check auth — will show main app or auth page
+  await checkAuth();
 }
 
 document.addEventListener('DOMContentLoaded', init);
